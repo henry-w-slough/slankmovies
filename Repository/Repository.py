@@ -1,5 +1,5 @@
 from . import FileReader
-from . import config
+from .. import config
 
 import os
 import json
@@ -24,7 +24,6 @@ class Repository():
 
         #manifest file for metadata
         self.manifest_src = os.path.join(self.root, config.MANIFEST_SRC)
-
 
         with open(self.manifest_src, "w") as manifest:
             json.dump(config.MANIFEST_DEFAULTS, manifest)

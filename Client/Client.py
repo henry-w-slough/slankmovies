@@ -1,4 +1,5 @@
 from . import FileReader
+from .. import config
 
 
 class Client():
@@ -16,5 +17,5 @@ class Client():
         self.read_size = (1024*1024*size)
 
 
-    def attach_file(self, connected_dir:str, file_repository:str) -> None:
-        FileReader.attach_file
+    def attach_file(self, new_dir:str, file_repository:str) -> None:
+        FileReader.attach_file(file_repository, new_dir, self.read_size)
