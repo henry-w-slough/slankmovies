@@ -22,4 +22,17 @@ class MovieRepository:
         ChunkParser.file_to_chunks(movie, src, config.DEFAULT_READ_SIZE)
 
 
+    def get_movie_by_id(self, id:str) -> Movie.Movie:
+        return self.all_movies[id]
+
+
+    def get_movie_by_name(self, name:str) -> Movie.Movie:
+        for movie in self.all_movies.values():
+            if movie.name == name:
+                return movie
+        print("WARNING: MovieRepository: get_movie_by_name: No movie of name {name} was found.")
+        return Movie.Movie(-1, "")
+   
+
+
         
