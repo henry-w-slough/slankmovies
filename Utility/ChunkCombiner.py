@@ -7,9 +7,9 @@ import json
 from .. import config
 
 def chunks_to_file(movie:Movie.Movie, chunks_dir:str, new_dir:str) -> None:
-
+    """Reads all chunks in the given directory and writes the attached data to a new file in the new directory."""
     os.makedirs(new_dir, exist_ok=True)
-    
+
     #opening new directory for writing to
     with open(os.path.join(new_dir, "video.mp4"), "wb") as new_file:
         #iterates in order of the chunk order read, meaning true data order.
