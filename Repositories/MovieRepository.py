@@ -1,12 +1,10 @@
 from ..Models import Movie
-
 from ..Utility import ChunkParser
 from ..Utility import ChunkCombiner
-
 from .. import config
 
 import os
-import uuid
+import sqlite3
 
 class MovieRepository:
 
@@ -17,6 +15,11 @@ class MovieRepository:
         self.all_movies: dict[str, Movie.Movie] = {
             
         }
+
+        self.db_context = sqlite3.connect("movies_data.db")
+        self.db_cursor = self.db_context.cursor()
+
+        for row in self.db_context.execute("SELECT * FROM ")
 
 
     def add_movie(self, movie:Movie.Movie, src:str) -> None:
