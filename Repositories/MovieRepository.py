@@ -25,33 +25,25 @@ class MovieRepository:
         ChunkParser.file_to_chunks(movie, src, config.DEFAULT_READ_SIZE)
 
 
-    def get_movie_by_id(self, id:str) -> Movie.Movie:
-        return self.all_movies[id]
-        #fallback with invalid movie id
-        print(f"WARNING: MovieRepository: get_movie_by_id: No movie of id '{id}' was found.")
-        return Movie.Movie(-1, "")
+    def get_movie_by_id(self, id:str) -> Movie.Movie | None:
+        return self.all_movies.get(id, None)
 
 
-    def get_movie_by_name(self, name:str) -> Movie.Movie:
+    def get_movie_by_name(self, name:str) -> Movie.Movie | None:
         for movie in self.all_movies.values():
             if movie.name == name:
                 return movie
-
-        #fallback with invalid movie name
-        return Movie.Movie(str(uuid.uuid4()), "")
+        return None
 
 
-    def get_movie_directory(self, movie:Movie.Movie) -> str:
+    def get_movie_directory(self, movie:Movie.Movie) -> str | None:
         for dir, m in self.all_movies.items():
             if movie == m:
                 return dir
-        return ""
+        return None
 
 
     def copy_movie(self, movie:Movie.Movie, new_dir:str) -> None:
-        ChunkCombiner.chunks_to_file(movie, self.get_movie_directory(movie), new_dir)
-        
-   
-
-
-        
+        chunks_dir = self.get_movie_directory(movie)
+        if chunks_dir:
+            ChunkCombiner.chunks_to_file(movie, chunks_dir, new_dir)
