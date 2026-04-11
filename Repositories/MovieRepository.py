@@ -6,6 +6,7 @@ from ..Utility import ChunkCombiner
 from .. import config
 
 import os
+import uuid
 
 class MovieRepository:
 
@@ -37,18 +38,18 @@ class MovieRepository:
                 return movie
 
         #fallback with invalid movie name
-        return Movie.Movie(-1, "")
+        return Movie.Movie(str(uuid.uuid4()), "")
 
 
     def get_movie_directory(self, movie:Movie.Movie) -> str:
         for dir, m in self.all_movies.items():
             if movie == m:
                 return dir
+        return ""
 
 
     def copy_movie(self, movie:Movie.Movie, new_dir:str) -> None:
-
-        ChunkCombiner.chunks_to_file(self.get_movie_directory(movie), new_dir)
+        ChunkCombiner.chunks_to_file(movie, self.get_movie_directory(movie), new_dir)
         
    
 
