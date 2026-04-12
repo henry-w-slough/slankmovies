@@ -19,13 +19,24 @@ class MovieRepository:
         self.db_context = sqlite3.connect("movies_data.db")
         self.db_cursor = self.db_context.cursor()
 
-        for row in self.db_context.execute("SELECT * FROM ")
+        #creating sqlite3 database table for movie data
+        self.db_cursor.execute("""
+            CREATE TABLE IF NOT EXISTS movies (
+                id   INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL
+            )
+        """)
+        self.db_context.commit()
 
 
     def add_movie(self, movie:Movie.Movie, src:str) -> None:
         """Adds a new movie to the Repository movie dict with the given attributes"""
         self.all_movies[os.path.join(config.MOVIES_DIR, movie.name)] = movie   
         ChunkParser.file_to_chunks(movie, src, config.DEFAULT_READ_SIZE)
+
+        #adding new movie to db table
+        self.db_cursor.execute("INSERT INTO movies (id, name) VALUES (?, ?)", (movie.id, movie.name))
+        self.db_context.commit()
 
 
     def get_movie_by_id(self, id:str) -> Movie.Movie | None:
