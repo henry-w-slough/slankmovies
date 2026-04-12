@@ -34,10 +34,6 @@ class MovieRepository:
         self.all_movies[os.path.join(config.MOVIES_DIR, movie.name)] = movie   
         ChunkParser.file_to_chunks(movie, src, config.DEFAULT_READ_SIZE)
 
-        #adding new movie to db table
-        self.db_cursor.execute("INSERT INTO movies (id, name) VALUES (?, ?)", (movie.id, movie.name))
-        self.db_context.commit()
-
 
     def get_movie_by_id(self, id:str) -> Movie.Movie | None:
         """Returns the Movie corresponding to the given Id. If it's not found, None is returned."""

@@ -11,7 +11,7 @@ def chunks_to_file(movie:Movie.Movie, chunks_dir:str, new_dir:str) -> None:
     os.makedirs(new_dir, exist_ok=True)
 
     #opening new directory for writing to
-    with open(os.path.join(new_dir, "video.mp4"), "wb") as new_file:
+    with open(os.path.join(new_dir, f"{config.DEFAULT_MOVIE_COPY_NAME}{config.DEFAULT_MOVIE_EXTENSION}"), "wb") as new_file:
         #iterates in order of the chunk order read, meaning true data order.
         for chunk_id in movie.chunk_order:
             #wriitng read data to new file
