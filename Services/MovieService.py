@@ -4,7 +4,9 @@ from ..Exceptions import movie_exceptions
 from ..Utility import ChunkCombiner 
 from ..Utility import ChunkParser
 from .. import config
+
 import os
+import uuid
 
 
 class MovieService:
@@ -15,9 +17,9 @@ class MovieService:
         self.movie_repository = MovieRepository.MovieRepository()
 
 
-    def add_movie(self, id:str, name:str, src:str) -> None:
+    def add_movie(self, name:str, src:str) -> None:
         """Adds a movie to the Service's repository with the given characteristics."""
-        new_movie = Movie.Movie(id, name)
+        new_movie = Movie.Movie(str(uuid.uuid4()), name)
         self.movie_repository.add_movie(new_movie, src)   
         ChunkParser.file_to_chunks(new_movie, src, config.DEFAULT_READ_SIZE)
 
