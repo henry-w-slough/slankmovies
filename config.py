@@ -2,6 +2,6 @@ import os
 
 
 MOVIE_FORMAT = "mp4"
-MOVIE_FILENAME = "movie"
+MOVIE_FILENAME = "movie.mp4"
 
-PROXY_ADDRESS = os.environ["SLANKMOVIES_PROXY_ADDRESS"]
+PROXY_ADDRESS = "socks5h://127.0.0.1:9050"

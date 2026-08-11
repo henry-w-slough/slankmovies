@@ -1,4 +1,6 @@
 import yt_dlp
+import httpx
+import os
 
 import config
 
@@ -12,22 +14,36 @@ class HTTPScraper:
         self._download_configs = yt_dlp.parse_options([])[-1]
 
         self._download_configs["proxy"] = config.PROXY_ADDRESS
-        self._download_configs["outtmpl"] = f"{config.MOVIE_FILENAME}.{config.MOVIE_FORMAT}"
         self._download_configs["merge_output_format"] = config.MOVIE_FORMAT
         self._download_configs["quiet"] = False
 
-        self._download_connection = yt_dlp.YoutubeDL(params=self._download_configs)
 
-
-    def download_movie(self, url: str, http_headers: dict = {}) -> None:
-        """Calls to the given URLS and downloads their contents.
+    async def get_movie_response(self, url: str, headers: dict, *args, **kwargs) -> httpx.Response:
+        """Returns the full response of the given request as a Response."""
         
-        Note that http_headers is optional but strongly recommended, as
-        most sites require request headers to return a proper response."""
+        async with httpx.AsyncClient() as client:
 
-        self._download_connection.params["http_headers"] = http_headers
+            response = await client.get(
+                url,
+                headers=headers,
+                *args,
+                **kwargs
+            )
 
-        self._download_connection.download([url])
+            response.raise_for_status()
+
+            return response
+
+
+    def download_movie(self, url: str, headers: dict, dir: str) -> None:
+        """Calls to the given URLS and downloads it's contents to the given directory."""
+
+        request_parameters = self._download_configs
+        request_parameters["http_headers"] = headers
+        request_parameters["outtmpl"] = os.path.join(dir, config.MOVIE_FILENAME)
+
+        with yt_dlp.YoutubeDL(params=request_parameters) as connection:
+            connection.download([url])
 
 
         
