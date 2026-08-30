@@ -1,7 +1,7 @@
 import httpx
 import asyncio
 import m3u8
-from typing import Any
+import charset_normalizer
 
 
 class RequestHandler:
@@ -18,11 +18,12 @@ class RequestHandler:
                 self.mounts[scheme] = httpx.AsyncHTTPTransport(proxy=proxy)
 
         self.connection = httpx.AsyncClient(
-            mounts=self.mounts,
-            limits=httpx.Limits(max_connections=25, max_keepalive_connections=20)
+            mounts = self.mounts,
+            limits = httpx.Limits(max_connections=200),
+            timeout = httpx.Timeout(connect=10.0, read=20.0, write=20.0, pool=10.0)
         )
 
-        self.semaphore = asyncio.Semaphore(20)
+        self.semaphore = asyncio.Semaphore(50)
 
 
     async def send_request(self, method: str, url: str, headers: dict | None = None, *args, **kwargs) -> httpx.Response:
@@ -52,10 +53,17 @@ class RequestHandler:
     async def get_m3u8(self, url: str, headers: dict[str, str] | None) -> m3u8.M3U8:
         """Returns a new M3U8 object based on the content of the return from the given URL. Raises an InvalidMasterM3U8Exception if the given url is not a master.m3u8."""
         #using httpx in custom request function to allow proxy use
-        master_response = await self.send_request("get", url, headers)
-        master_data = m3u8.loads(master_response.content.decode(), url)
-        
-        return master_data
+        response = await self.send_request("get", url, headers)
+
+        #getting encoding
+        encoding_charset = charset_normalizer.from_bytes(response.content).best()
+
+        if encoding_charset is None:
+            raise LookupError()
+
+        playlist = m3u8.loads(response.content.decode(encoding_charset.encoding), url)
+
+        return playlist
     
 
     async def get_segment_batch_responses(self, variant: m3u8.Playlist, headers: dict[str, str]) -> list[httpx.Response]:
@@ -63,7 +71,7 @@ class RequestHandler:
         responses = []
 
         variant_response = await self.send_request("get", variant.absolute_uri, headers)
-        variant_data = m3u8.loads(variant_response.content.decode(), variant.absolute_uri)
+        variant_data = m3u8.loads(str(variant_response.content), variant.absolute_uri)
 
         segment_urls = [seg.absolute_uri for seg in variant_data.segments]
 
