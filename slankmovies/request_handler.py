@@ -26,9 +26,13 @@ class RequestHandler:
         self.semaphore = asyncio.Semaphore(50)
 
 
-    async def send_request(self, method: str, url: str, headers: dict | None = None, *args, **kwargs) -> httpx.Response:
+    async def send_request(self, method: str, url: str, headers: dict | None = None, log: bool = False, *args, **kwargs) -> httpx.Response:
 
         async with self.semaphore:
+
+            if log:
+                print(f"----Attemping request to: '{url}----'")
+
             try:
                 response = await self.connection.request(
                     method,
@@ -38,6 +42,8 @@ class RequestHandler:
                     **kwargs
                 )
                 response.raise_for_status()
+                if log:
+                    print(f"----Successful request to: '{url}'----'")
                 return response
                 
             except httpx.HTTPStatusError as e:
@@ -70,17 +76,17 @@ class RequestHandler:
 
         responses = []
 
-        variant_response = await self.send_request("get", variant.absolute_uri, headers)
-        variant_data = m3u8.loads(str(variant_response.content), variant.absolute_uri)
+        variant_response = await self.send_request("get", variant.absolute_uri, headers, log = True)
+        variant_data = m3u8.loads(variant_response.content.decode(), variant.absolute_uri)
 
         segment_urls = [seg.absolute_uri for seg in variant_data.segments]
 
         #gathering request tasks for asyncio for async
-        tasks = [self.send_request("get", url, headers) for url in segment_urls]
+        tasks = [self.send_request("get", url, headers, log = True) for url in segment_urls]
         responses = await asyncio.gather(*tasks)
 
         return responses
 
 
         
-        
+    
