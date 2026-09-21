@@ -8,7 +8,7 @@ class Scraper:
         self.data_handler = DataHandler()
         self.request_handler = RequestHandler()
         self.m3u8_handler = M3U8Handler()
-        self.web_scraper = WebScraper(False)
+        self.web_scraper = WebScraper()
 
 
     async def start(self) -> None:

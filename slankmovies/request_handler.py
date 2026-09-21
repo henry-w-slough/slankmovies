@@ -14,7 +14,7 @@ class RequestHandler:
         self.proxy = httpx.AsyncHTTPTransport(proxy="socks5h://127.0.0.1:9050")
 
         self.client = httpx.AsyncClient(
-
+            
             # mounts={
             #     "http://": self.proxy,
             #     "https://": self.proxy,
@@ -51,9 +51,6 @@ class RequestHandler:
                 )
             response.raise_for_status()
             return response
-
-        except httpx.ProxyError:
-            raise httpx.ProxyError("---Failed to connect to proxy. Are you sure the Tor Daemon is running?---")
         
         except httpx.ConnectError:
             raise httpx.ConnectError(f"---Failed to connect to '{url}'---")

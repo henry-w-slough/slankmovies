@@ -2,8 +2,6 @@ import asyncio
 import config
 import logging
 
-
-
 import scraper
 
 
@@ -23,14 +21,11 @@ async def main() -> None:
     await s.start()
 
     await s.download_movie(
-        "movies/movie.mp4",
-        "https://cinejoy.to/movie/244786-whiplash-2014",
+        f"movies/.ts",
+        input("URL: ")
     )
 
     await s.close()
-
-
-    
 
 
 if __name__ == "__main__":
