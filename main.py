@@ -1,31 +1,35 @@
 import asyncio
-import config
 import logging
+import random
+import uuid
 
 import scraper
+import id_scraper
 
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
-logging.getLogger("httpx").setLevel(logging.INFO)
-logging.getLogger("httpcore").setLevel(logging.INFO)
-
-
-s = scraper.Scraper()
+scrape = scraper.Scraper()
+id_scrape = id_scraper.MovieIdScraper()
 
 
 async def main() -> None:
 
-    await s.start()
+    await scrape.start()
 
-    await s.download_movie(
-        f"movies/.ts",
-        input("URL: ")
-    )
+    print("Getting movie entries from TMDB...")
 
-    await s.close()
+    movies = await id_scrape.get_movie_entries()
+
+    for movie in movies:
+
+        print(f"Attemping to download '{movie.name}' (id: {movie.id})...")
+
+        try:
+            await scrape.download_movie(f"MOVIES/{movie.name}.ts", f"https://cinejoy.pk/watch/movie/{movie.id}")
+        except:
+            print(f"! Exception caught while downloading '{movie.name}' !")
+            continue
+
+    await scrape.close()
 
 
 if __name__ == "__main__":

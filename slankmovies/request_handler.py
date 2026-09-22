@@ -14,11 +14,6 @@ class RequestHandler:
         self.proxy = httpx.AsyncHTTPTransport(proxy="socks5h://127.0.0.1:9050")
 
         self.client = httpx.AsyncClient(
-            
-            # mounts={
-            #     "http://": self.proxy,
-            #     "https://": self.proxy,
-            # },
 
             timeout=httpx.Timeout(
                 connect=10.0,
@@ -29,7 +24,10 @@ class RequestHandler:
 
             limits = httpx.Limits(
                 max_connections=200
-            )
+            ),
+
+            trust_env=False,
+            verify=False
         )
 
         self.semaphore = asyncio.Semaphore(100)
@@ -42,6 +40,7 @@ class RequestHandler:
 
         try:
             async with self.semaphore:
+
                 response = await self.client.request(
                     method,
                     url,
@@ -50,6 +49,10 @@ class RequestHandler:
                     **kwargs
                 )
             response.raise_for_status()
+
+            if logging:
+                print(f"---Request to URL: '{url}' succeeded ({response.status_code}).---")
+
             return response
         
         except httpx.ConnectError:
@@ -91,7 +94,7 @@ class RequestHandler:
         return playlist
 
 
-    async def get_segment_batch_byte_stream(self, segments: list[m3u8.Segment], headers: dict[str, str]) -> AsyncGenerator[bytes, None]:
+    async def get_segment_batch_byte_stream(self, segments: list[m3u8.Segment], headers: dict[str, str], logging: bool = False) -> AsyncGenerator[bytes, None]:
 
         if not segments:
             return
@@ -104,6 +107,7 @@ class RequestHandler:
                 init_section.absolute_uri,
                 "get",
                 headers,
+                logging = logging
             )
             yield init_response.content
 
@@ -119,6 +123,7 @@ class RequestHandler:
                         segment.absolute_uri,
                         "get",
                         headers,
+                        logging = logging
                     )
                 )
                 for segment in segment_batch
