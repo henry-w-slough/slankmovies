@@ -41,7 +41,7 @@ class RequestHandler:
             ),
 
             limits = httpx.Limits(
-                max_connections=200
+                max_connections=250
             ),
 
             trust_env=False,
@@ -49,7 +49,7 @@ class RequestHandler:
             transport=transport,
         )
 
-        self.semaphore = asyncio.Semaphore(20)
+        self.semaphore = asyncio.Semaphore(200)
 
         self.default_retries = 3
         self.default_batch_size = 200

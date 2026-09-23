@@ -38,8 +38,8 @@ class Scraper:
         print(f"---Attempting to download all segments into source path: '{src}'---")
 
         await self.data_handler.write_byte_stream(
-            src,
-            self.request_handler.get_segment_batch_byte_stream(segments, m3u8_info["headers"], logging=True)
+            self.request_handler.get_segment_batch_byte_stream(segments, m3u8_info["headers"], logging=True, window=100),
+            src
         )
 
         print(f"---Successfully downloaded movie into source path: '{src}'")
