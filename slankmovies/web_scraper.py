@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sys
 from typing import TypedDict
 
 from playwright.async_api import (
@@ -652,8 +653,276 @@ _NUDGE_VIDEO_SCRIPT = r"""
 """
 
 
+
+# Chromium's new headless mode keeps the headed fingerprint, but automation
+# still leaves traces: the fixed 2 GiB cgroup allocation, the automation
+# infobar, and a setTimeout that always clamps to 0ms. The per-platform flags
+# are added at launch time so a macOS run does not carry Linux-only switches
+# that themselves form a fingerprint.
+_STEALTH_LAUNCH_BASE = [
+	"--disable-blink-features=AutomationControlled",
+	"--disable-infobars",
+	"--no-default-browser-check",
+	"--no-first-run",
+	"--disable-session-crashed-bubble",
+	"--hide-scrollbars",
+	"--disable-hang-monitor",
+	"--disable-background-timer-throttling",
+	"--disable-backgrounding-occluded-windows",
+	"--disable-renderer-backgrounding",
+	"--disable-breakpad",
+]
+_STEALTH_LAUNCH_LINUX = [
+	"--disable-dev-shm-usage",
+	"--no-sandbox",
+	"--disable-gpu",
+]
+
+_STEALTH_WINDOW = (1920, 1080)
+_STEALTH_LOCALE = "en-US"
+_STEALTH_TIMEZONE = "America/New_York"
+
+_STEALTH_UA = (
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+	"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+
+
+def _stealth_launch_args() -> list[str]:
+	# sys.platform is stable for the process lifetime, so this is safe to
+	# call once per start().
+	args = list(_STEALTH_LAUNCH_BASE)
+	if sys.platform.startswith("linux"):
+		args.extend(_STEALTH_LAUNCH_LINUX)
+	return args
+
+
+def _context_options() -> dict:
+	"""Context options that mimic a real user's browser session.
+
+	user_agent is pinned (rather than patched at runtime) because the UA is
+	also read by RequestHandler: the headers resolve_m3u8() replays onto every
+	segment request would otherwise carry the headless marker too.
+	"""
+	return {
+		"user_agent": _STEALTH_UA,
+		"viewport": {"width": _STEALTH_WINDOW[0], "height": _STEALTH_WINDOW[1]},
+		"locale": _STEALTH_LOCALE,
+		"timezone_id": _STEALTH_TIMEZONE,
+		"color_scheme": "light",
+		"extra_http_headers": {
+			"Accept-Language": "en-US,en;q=0.9",
+			"Sec-CH-UA": '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
+			"Sec-CH-UA-Mobile": "?0",
+			"Sec-CH-UA-Platform": '"macOS"',
+		},
+	}
+
+
+
+# Each script runs in every frame before any page script, so the checks these
+# sites run (usually via a fingerprinting bundle served before the player)
+# all see a normal-looking browser.
+_STEALTH_INIT_SCRIPTS = [
+	# navigator.webdriver is true under any CDP automation; a normal session
+	# reports false, and the prototype getter is what gets probed.
+	"""
+	Object.defineProperty(Navigator.prototype, 'webdriver', {
+		get: () => false,
+		configurable: true,
+	});
+	""",
+	# window.chrome exists in every real desktop Chrome; headless reports
+	# undefined, which is one of the cheapest checks a bot script performs.
+	"""
+	if (!window.chrome) {
+		window.chrome = {
+			app: {
+				isInstalled: false,
+				InstallState: {DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed'},
+				RunningState: {CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running'},
+			},
+			csi: () => ({}),
+			loadTimes: () => ({}),
+			runtime: {
+				OnInstalledReason: {CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update'},
+				OnRestartRequiredReason: {APP_UPDATE: 'app_update', BROWSER_UPDATE: 'browser_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic'},
+				PlatformArch: {ARM: 'arm', ARM64: 'arm64', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64'},
+				PlatformNaclArch: {ARM: 'arm', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64'},
+				PlatformOs: {ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win'},
+				RequestUpdateCheckStatus: {NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available'},
+				connect: () => {},
+				sendMessage: () => {},
+			},
+		};
+	}
+	""",
+	# A real desktop Chrome reports a populated plugin list and
+	# pdfViewerEnabled; headless ships with plugins.length === 0.
+	"""
+	const makePlugin = (name, description, filename, mimeTypes) => {
+		const plugin = Object.create(Plugin.prototype);
+		for (const mime of mimeTypes) {
+			const type = Object.create(MimeType.prototype);
+			Object.defineProperties(type, {
+				type: {value: mime.type, enumerable: true},
+				suffixes: {value: mime.suffixes, enumerable: true},
+				description: {value: mime.description, enumerable: true},
+				enabledPlugin: {value: plugin, enumerable: true},
+			});
+			plugin[mime.type] = type;
+		}
+		Object.defineProperties(plugin, {
+			name: {value: name, enumerable: true},
+			description: {value: description, enumerable: true},
+			filename: {value: filename, enumerable: true},
+			length: {value: mimeTypes.length, enumerable: true},
+		});
+		return plugin;
+	};
+
+	const pdfMime = {type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format'};
+	const realPlugins = [
+		makePlugin('PDF Viewer', 'Portable Document Format', 'internal-pdf-viewer', [pdfMime]),
+		makePlugin('Chrome PDF Viewer', 'Portable Document Format', 'internal-pdf-viewer', [pdfMime]),
+		makePlugin('Chromium PDF Viewer', 'Portable Document Format', 'internal-pdf-viewer', [pdfMime]),
+		makePlugin('WebKit built-in PDF', 'Portable Document Format', 'internal-pdf-viewer', [pdfMime]),
+	];
+	const realMimeTypes = realPlugins.flatMap((plugin) =>
+		Object.values(plugin).filter((value) => value instanceof MimeType),
+	);
+
+	const asPluginArray = (plugins) => {
+		const arr = Object.create(PluginArray.prototype);
+		for (const plugin of plugins) arr[plugin.name] = plugin;
+		Object.defineProperty(arr, 'length', {value: plugins.length, enumerable: true});
+		arr.item = (index) => plugins[index] || null;
+		arr.namedItem = (name) => arr[name] || null;
+		arr.refresh = () => {};
+		return arr;
+	};
+	const asMimeTypeArray = (mimeTypes) => {
+		const arr = Object.create(MimeTypeArray.prototype);
+		for (const mimeType of mimeTypes) arr[mimeType.type] = mimeType;
+		Object.defineProperty(arr, 'length', {value: mimeTypes.length, enumerable: true});
+		arr.item = (index) => mimeTypes[index] || null;
+		arr.namedItem = (name) => arr[name] || null;
+		return arr;
+	};
+
+	Object.defineProperty(navigator, 'plugins', {get: () => asPluginArray(realPlugins), configurable: true});
+	Object.defineProperty(navigator, 'mimeTypes', {get: () => asMimeTypeArray(realMimeTypes), configurable: true});
+	Object.defineProperty(navigator, 'pdfViewerEnabled', {get: () => true, configurable: true});
+	""",
+	# A headless run reports a single language and no hardware hints; both are
+	# read by fingerprint scripts before the player is served.
+	"""
+	Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en'], configurable: true});
+	Object.defineProperty(navigator, 'deviceMemory', {get: () => 8, configurable: true});
+	Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8, configurable: true});
+	if (!navigator.userAgentData) {
+		Object.defineProperty(navigator, 'userAgentData', {
+			get: () => ({
+				brands: [
+					{brand: 'Chromium', version: '131'},
+					{brand: 'Not_A Brand', version: '24'},
+					{brand: 'Google Chrome', version: '131'},
+				],
+				mobile: false,
+				platform: 'macOS',
+			}),
+			configurable: true,
+		});
+	}
+	""",
+	# Headless falls back to SwiftShader, whose renderer string no real
+	# machine produces. Only the reported strings are rewritten; the canvas
+	# still renders normally.
+	"""
+	const patchWebGLContext = (context) => {
+		if (!context || context.__stealthPatched) return context;
+		try {
+			const vendor = 'Apple';
+			const renderer = 'Apple M2';
+			const info = context.getExtension('WEBGL_debug_renderer_info');
+			if (info) {
+				const originalGetParameter = context.getParameter.bind(context);
+				context.getParameter = function(parameter) {
+					if (parameter === info.UNMASKED_VENDOR_WEBGL) return vendor;
+					if (parameter === info.UNMASKED_RENDERER_WEBGL) return renderer;
+					return originalGetParameter(parameter);
+				};
+			}
+			context.__stealthPatched = true;
+		} catch (e) {}
+		return context;
+	};
+
+	const origGetContext = HTMLCanvasElement.prototype.getContext;
+	HTMLCanvasElement.prototype.getContext = function(type, ...args) {
+		const context = origGetContext.call(this, type, ...args);
+		if (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2') {
+			return patchWebGLContext(context);
+		}
+		return context;
+	};
+	""",
+	# Permissions.query must answer notifications with the Notification API's
+	# own state like a fresh profile does; headless reports denied, a real
+	# fresh profile reports prompt (the default before any site is granted).
+	"""
+	if (window.Notification && navigator.permissions) {
+		const originalQuery = window.navigator.permissions.query.bind(window.navigator.permissions);
+		window.navigator.permissions.query = (parameters) => (
+			parameters.name === 'notifications'
+				? Promise.resolve({state: 'prompt'})
+				: originalQuery(parameters)
+		);
+	}
+	""",
+	# The automation runtimes leave marker properties on window/document
+	# (cdc_* from chromedriver, __playwright, __selenium); nothing
+	# legitimate sets these, so they are stripped defensively.
+	"""
+	try {
+		for (const key of Object.keys(document)) {
+			if (/^cdc_|^__playwright|^__selenium|^__nightmare/.test(key)) {
+				try { delete document[key]; } catch (e) {}
+			}
+		}
+	} catch (e) {}
+	""",
+]
+
+
 class WebScraper:
 	"""Resolve an HLS playlist requested by a movie page in a real browser."""
+
+	# The default headless=True launch uses the stripped-down headless shell
+	# binary, which is trivially detected by the bot checks these sites run
+	# before serving the player: navigator.userAgent reports "HeadlessChrome",
+	# navigator.plugins is empty, pdfViewerEnabled is false, window.chrome is
+	# undefined and WebGL falls back to a SwiftShader renderer instead of the
+	# real GPU. In that state the player never starts, so no m3u8 request is
+	# ever observed. The full Chromium binary in its new headless mode
+	# ("chromium" channel) matches the headed fingerprint for all of those
+	# except the UA string, which is normalised when the context is created.
+	#
+	# The launch flags below stop the automation-only surface from leaking
+	# into the page: --disable-blink-features=AutomationControlled removes the
+	# navigator.webdriver wiring and the "Chrome is being controlled" infobar,
+	# and the no-first-run / no-default-browser-check / disable-infobars group
+	# keeps the session quiet. Flags that only make sense on Linux
+	# (disable-dev-shm-usage, no-sandbox, disable-gpu) are appended
+	# per-platform so a macOS run does not carry a Linux-shaped fingerprint.
+	#
+	# The context is created with a pinned UA, viewport, locale and timezone
+	# (see _context_options()), and _STEALTH_INIT_SCRIPTS patch the remaining
+	# runtime fingerprints (navigator.webdriver, window.chrome, plugin list,
+	# WebGL vendor/renderer, permissions) in every frame before page scripts
+	# run. The pinned UA matters beyond the browser: the headers
+	# resolve_m3u8() replays through RequestHandler carry it onto every
+	# segment request too, so it must never read HeadlessChrome.
 
 	def __init__(self, headless: bool = True) -> None:
 		self.headless = headless
@@ -667,46 +936,23 @@ class WebScraper:
 	async def start(self) -> None:
 		self.playwright = await async_playwright().start()
 
-		# The default headless=True launch uses the stripped-down headless
-		# shell binary, which is trivially detected by the bot checks these
-		# sites run before serving the player: navigator.userAgent reports
-		# "HeadlessChrome", navigator.plugins is empty, pdfViewerEnabled is
-		# false, window.chrome is undefined and WebGL falls back to a
-		# SwiftShader renderer instead of the real GPU. In that state the
-		# player never starts, so no m3u8 request is ever observed. The full
-		# Chromium binary in its new headless mode ("chromium" channel)
-		# matches the headed fingerprint for all of those except the UA
-		# string, which is normalised below.
+		# See the class comment for why the "chromium" channel is used in
+		# headless mode and why the launch flags are needed.
 		if self.headless:
 			self.browser = await self.playwright.chromium.launch(
-				headless=True, channel="chromium"
+				headless=True, channel="chromium",
+				args=_stealth_launch_args(),
 			)
 		else:
-			self.browser = await self.playwright.chromium.launch(headless=False)
-
-		if self.headless:
-			# Read the headless UA from the browser itself so it stays in
-			# sync with the installed version, then drop the HeadlessChrome
-			# marker. This also fixes the headers resolve_m3u8() replays
-			# through RequestHandler, which would otherwise carry the
-			# HeadlessChrome agent onto every segment request too.
-			probe = await self.browser.new_context()
-			try:
-				page = await probe.new_page()
-				raw_ua = await page.evaluate("navigator.userAgent")
-			finally:
-				await probe.close()
-
-			self.context = await self.browser.new_context(
-				user_agent=raw_ua.replace("HeadlessChrome", "Chrome")
+			self.browser = await self.playwright.chromium.launch(
+				headless=False, args=_stealth_launch_args()
 			)
-			# Chromium reports navigator.webdriver as true under automation
-			# even when headed; a normal session reports false.
-			await self.context.add_init_script(
-				"Object.defineProperty(navigator, 'webdriver', {get: () => false});"
-			)
-		else:
-			self.context = await self.browser.new_context()
+
+		self.context = await self.browser.new_context(
+			**_context_options(),
+		)
+		for script in _STEALTH_INIT_SCRIPTS:
+			await self.context.add_init_script(script)
 
 		self.context.on("page", self._register_page)
 

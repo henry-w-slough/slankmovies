@@ -1,10 +1,16 @@
 import asyncio
-import logging
-import random
-import uuid
 
 import scraper
 import id_scraper
+
+import logging
+
+# Configure the root logger format and level
+logging.basicConfig(
+    format="%(levelname)s [%(asctime)s] %(name)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    level=logging.DEBUG
+)
 
 
 scrape = scraper.Scraper()
@@ -26,7 +32,7 @@ async def main() -> None:
         try:
             await scrape.download_movie(f"MOVIES/{movie.name}.ts", f"https://cinejoy.pk/watch/movie/{movie.id}")
         except:
-            print(f"! Exception caught while downloading '{movie.name}' !")
+            print(f"\r ---Exception caught while downloading '{movie.name}': {scrape.request_handler.logs["error"]}")
             continue
 
     await scrape.close()

@@ -4,17 +4,35 @@ from urllib.parse import urlparse
 from typing import AsyncGenerator
 import asyncio
 
+from .dns_resolver import DohNetworkBackend, DohResolver
+
 
 class RequestHandler:
 
 
     def __init__(self) -> None:
-        "Handles all HTTPS and HTTP requests. Assumes Tor daemon is in use and calls through the proxy."
+        "Handles all HTTPS and HTTP requests."
 
-        self.proxy = httpx.AsyncHTTPTransport(proxy="socks5h://127.0.0.1:9050")
+        # The system resolver is bypassed on purpose: on DNS-filtering
+        # networks (FortiGuard and the like) plaintext DNS is answered with a
+        # block portal, which presented as 403s on every m3u8 and segment
+        # request. See dns_resolver.py.
+        self.resolver = DohResolver()
+
+        transport: httpx.AsyncHTTPTransport
+
+        if _tor_reachable():
+            # A Tor daemon is running: route through it. socks5h keeps DNS on
+            # the Tor exit, so no client-side resolver is involved at all.
+            transport = httpx.AsyncHTTPTransport(proxy="socks5h://127.0.0.1:9050")
+        else:
+            # Direct connection with DoH-resolved addresses (curl --resolve
+            # semantics): connect_tcp returns the real edge IP while SNI, the
+            # Host header and certificate checks stay bound to the hostname.
+            transport = httpx.AsyncHTTPTransport()
+            transport._pool._network_backend = DohNetworkBackend(self.resolver)
 
         self.client = httpx.AsyncClient(
-
             timeout=httpx.Timeout(
                 connect=10.0,
                 read=60.0,
@@ -27,13 +45,20 @@ class RequestHandler:
             ),
 
             trust_env=False,
-            verify=False
+            verify=False,
+            transport=transport,
         )
 
         self.semaphore = asyncio.Semaphore(100)
 
         self.default_retries = 3
         self.default_batch_size = 200
+
+        self.logs = {
+            "newest_request_url": "",
+            "last_successful_request": "",
+            "error": "", 
+        }
 
 
     async def send_request(self, url: str, method: str, headers: dict[str, str], logging: bool = False, *args, **kwargs) -> httpx.Response:
@@ -48,24 +73,32 @@ class RequestHandler:
                     *args,
                     **kwargs
                 )
+
+            if logging:
+                self.logs["newest_request_url"] = url
+
             response.raise_for_status()
 
             if logging:
-                print(f"---Request to URL: '{url}' succeeded ({response.status_code}).---")
+                self.logs["last_successful_request"] = (f"Request to URL: '{url}' succeeded ({response.status_code}).")
 
             return response
         
         except httpx.ConnectError:
-            raise httpx.ConnectError(f"---Failed to connect to '{url}'---")
+            self.logs["error"] = f"Failed to connect to '{url}'"
+            raise httpx.ConnectError(self.logs["error"])
 
         except httpx.ConnectTimeout:
-            raise httpx.ConnectTimeout(f"---Timed out while connecting to '{url}'---")
+            self.logs["error"] = f"Timed out while connecting to '{url}'"
+            raise httpx.ConnectTimeout(self.logs["error"])
 
         except httpx.ReadTimeout:
-            raise httpx.ReadTimeout(f"---Timed out while receiving data from '{url}'---")
+            self.logs["error"] = f"Timed out while receiving data from '{url}'"
+            raise httpx.ReadTimeout(self.logs["error"])
 
         except httpx.HTTPStatusError as e:
-            raise httpx.HTTPStatusError(f"---Received {e.response.status_code} on response from '{url}'---'", request=e.request, response=e.response)
+            self.logs["error"] = f"Received {e.response.status_code} on response from '{url}''"
+            raise httpx.HTTPStatusError(self.logs["error"], request=e.request, response=e.response)
 
 
 
@@ -84,7 +117,7 @@ class RequestHandler:
         #checking for proper m3u8 signatures
         parsed_url = urlparse(url)
         if not parsed_url.scheme or not parsed_url.netloc:
-            raise ValueError(f"---URL passed was not a valid M3U8: ({url})---")
+            raise ValueError(f"URL passed was not a valid M3U8: ({url})")
 
         playlist = m3u8.loads(
             response.content.decode(encoding),
@@ -145,3 +178,14 @@ class RequestHandler:
 
 
 
+
+
+def _tor_reachable() -> bool:
+    """True when a Tor SOCKS daemon is listening on the local proxy port."""
+    import socket
+
+    try:
+        with socket.create_connection(("127.0.0.1", 9050), timeout=0.5):
+            return True
+    except OSError:
+        return False
