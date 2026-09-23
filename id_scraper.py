@@ -26,7 +26,7 @@ class MovieIdScraper:
 
         movies: list[Movie] = []
 
-        date = datetime.datetime.now(datetime.timezone.utc).strftime("%m_%d_%Y")
+        date = datetime.datetime.now().strftime("%m_%d_%Y")
 
         url_to_send = f"https://files.tmdb.org/p/exports/movie_ids_{date}.json.gz" if not adult else f"https://files.tmdb.org/p/exports/adult_movie_ids_{date}.json.gz"
         movie_db_response = await self.request_handler.send_request(

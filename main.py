@@ -21,22 +21,17 @@ async def main() -> None:
 
     await scrape.start()
 
-    print("Getting movie entries from TMDB...")
-
-    movies = await id_scrape.get_movie_entries()
-
-    for movie in movies:
-
-        print(f"Attemping to download '{movie.name}' (id: {movie.id})...")
-
-        try:
-            await scrape.download_movie(f"MOVIES/{movie.name}.ts", f"https://cinejoy.pk/watch/movie/{movie.id}")
-        except:
-            print(f"\r ---Exception caught while downloading '{movie.name}': {scrape.request_handler.logs["error"]}")
-            continue
+    await scrape.download_movie(f"MOVIES/TheGodfather.ts", f"https://cinejoy.pk/watch/movie/238")
 
     await scrape.close()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+
+
+
+
+    

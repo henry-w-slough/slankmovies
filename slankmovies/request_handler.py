@@ -49,7 +49,7 @@ class RequestHandler:
             transport=transport,
         )
 
-        self.semaphore = asyncio.Semaphore(100)
+        self.semaphore = asyncio.Semaphore(20)
 
         self.default_retries = 3
         self.default_batch_size = 200
@@ -60,46 +60,57 @@ class RequestHandler:
             "error": "", 
         }
 
+        self.retryable_status_codes = {502, 503, 504}
+
 
     async def send_request(self, url: str, method: str, headers: dict[str, str], logging: bool = False, *args, **kwargs) -> httpx.Response:
 
-        try:
-            async with self.semaphore:
+        last_exception: Exception | None = None
 
-                response = await self.client.request(
-                    method,
-                    url,
-                    headers=headers,
-                    *args,
-                    **kwargs
+        for attempt in range(self.default_retries + 1):
+
+            try:
+                async with self.semaphore:
+                    response = await self.client.request(method, url, headers=headers, *args, **kwargs)
+
+                if logging:
+                    self.logs["newest_request_url"] = url
+
+                response.raise_for_status()
+
+                if logging:
+                    self.logs["last_successful_request"] = f"Request to URL: '{url}' succeeded ({response.status_code})."
+
+                return response
+
+            except httpx.ConnectError:
+                last_exception = httpx.ConnectError(f"Failed to connect to '{url}'")
+
+            except httpx.ConnectTimeout:
+                last_exception = httpx.ConnectTimeout(f"Timed out while connecting to '{url}'")
+
+            except httpx.ReadTimeout:
+                last_exception = httpx.ReadTimeout(f"Timed out while receiving data from '{url}'")
+
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code not in self.retryable_status_codes:
+                    self.logs["error"] = f"Received {e.response.status_code} on response from '{url}''"
+                    print(e.response.text)
+                    raise httpx.HTTPStatusError(self.logs["error"], request=e.request, response=e.response)
+
+                last_exception = httpx.HTTPStatusError(
+                    f"Received {e.response.status_code} on response from '{url}''",
+                    request=e.request,
+                    response=e.response,
                 )
 
-            if logging:
-                self.logs["newest_request_url"] = url
+            if attempt < self.default_retries:
+                await asyncio.sleep(0.5 * (2 ** attempt))
 
-            response.raise_for_status()
+        self.logs["error"] = str(last_exception)
 
-            if logging:
-                self.logs["last_successful_request"] = (f"Request to URL: '{url}' succeeded ({response.status_code}).")
-
-            return response
-        
-        except httpx.ConnectError:
-            self.logs["error"] = f"Failed to connect to '{url}'"
-            raise httpx.ConnectError(self.logs["error"])
-
-        except httpx.ConnectTimeout:
-            self.logs["error"] = f"Timed out while connecting to '{url}'"
-            raise httpx.ConnectTimeout(self.logs["error"])
-
-        except httpx.ReadTimeout:
-            self.logs["error"] = f"Timed out while receiving data from '{url}'"
-            raise httpx.ReadTimeout(self.logs["error"])
-
-        except httpx.HTTPStatusError as e:
-            self.logs["error"] = f"Received {e.response.status_code} on response from '{url}''"
-            raise httpx.HTTPStatusError(self.logs["error"], request=e.request, response=e.response)
-
+        if last_exception:
+            raise last_exception
 
 
     async def get_m3u8(self, url: str, headers: dict[str, str], *args, **kwargs) -> m3u8.M3U8:
@@ -127,7 +138,7 @@ class RequestHandler:
         return playlist
 
 
-    async def get_segment_batch_byte_stream(self, segments: list[m3u8.Segment], headers: dict[str, str], logging: bool = False) -> AsyncGenerator[bytes, None]:
+    async def get_segment_batch_byte_stream(self, segments: list[m3u8.Segment], headers: dict[str, str], logging: bool = False, window: int = 20) -> AsyncGenerator[bytes, None]:
 
         if not segments:
             return
@@ -140,41 +151,66 @@ class RequestHandler:
                 init_section.absolute_uri,
                 "get",
                 headers,
-                logging = logging
+                logging=logging
             )
             yield init_response.content
 
-        for start in range(0, len(segments), self.default_batch_size):
+        queue: asyncio.Queue = asyncio.Queue(maxsize=window)
 
-            #gets the segment batch based on the index of iteration for all segments
-            segment_batch = segments[start:start + self.default_batch_size]
-
-            #creates all request tasks for this batch
-            tasks = [
-                asyncio.create_task(
-                    self.send_request(
-                        segment.absolute_uri,
-                        "get",
-                        headers,
-                        logging = logging
-                    )
-                )
-                for segment in segment_batch
-            ]
-
+        async def worker(index: int, segment: m3u8.Segment) -> None:
             try:
-                responses = await asyncio.gather(*tasks)
-                # gather preserves the order in which tasks were created.
-                for response in responses:
-                    yield response.content
-                    
-            except BaseException:
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
+                response = await self.send_request(
+                    segment.absolute_uri,
+                    "get",
+                    headers,
+                    logging=logging
+                )
+                await queue.put((index, response.content))
+            except Exception as e:
+                await queue.put((index, e))
 
-                await asyncio.gather(*tasks, return_exceptions=True)
-                raise
+        async def scheduler() -> None:
+            # window caps in-flight requests via queue backpressure instead of
+            # holding self.default_batch_size full responses in memory at once
+            sem = asyncio.Semaphore(window)
+
+            async def bounded_worker(index, segment):
+                async with sem:
+                    await worker(index, segment)
+
+            tasks = [
+                asyncio.create_task(bounded_worker(i, seg))
+                for i, seg in enumerate(segments)
+            ]
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await queue.put(None)  # sentinel
+
+        scheduler_task = asyncio.create_task(scheduler())
+
+        buffer: dict[int, bytes] = {}
+        next_index = 0
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+
+                index, payload = item
+
+                if isinstance(payload, Exception):
+                    print(f"Skipping permanently failed segment {index}: {segments[index].absolute_uri}")
+                    buffer[index] = b""  # empty placeholder keeps ordering intact
+                else:
+                    buffer[index] = payload
+
+                while next_index in buffer:
+                    yield buffer.pop(next_index)
+                    next_index += 1
+
+        finally:
+            if not scheduler_task.done():
+                scheduler_task.cancel()
+            await asyncio.gather(scheduler_task, return_exceptions=True)
 
 
 
